@@ -1,0 +1,37 @@
+/* Ticker: add class "sd-ticker" to a Divi Text module. JS duplicates the content for a seamless loop. */
+.sd-ticker {
+	overflow: hidden;
+	white-space: nowrap;
+	--sd-ticker-duration: 30s;
+	--sd-ticker-gap: 4rem;
+}
+.sd-ticker--slow { --sd-ticker-duration: 50s; }
+.sd-ticker--fast { --sd-ticker-duration: 18s; }
+
+.sd-ticker .sd-ticker__track {
+	display: inline-flex;
+	gap: var(--sd-ticker-gap);
+	animation: sd-ticker-scroll var(--sd-ticker-duration) linear infinite;
+	will-change: transform;
+}
+.sd-ticker--reverse .sd-ticker__track { animation-direction: reverse; }
+.sd-ticker:hover .sd-ticker__track { animation-play-state: paused; }
+
+.sd-ticker .sd-ticker__item {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--sd-ticker-gap);
+	flex-shrink: 0;
+}
+.sd-ticker .sd-ticker__item > * { margin: 0; padding: 0; }
+
+@keyframes sd-ticker-scroll {
+	from { transform: translateX(0); }
+	to   { transform: translateX(calc(-50% - var(--sd-ticker-gap) / 2)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.sd-ticker .sd-ticker__track { animation: none; }
+	.sd-ticker { white-space: normal; text-align: center; }
+	.sd-ticker .sd-ticker__item[aria-hidden="true"] { display: none; }
+}
