@@ -6,7 +6,7 @@
  * Author:            Get Digital Fit
  * Author URI:        https://www.getdigitalfit.co.uk
  * License:           GPL-2.0-or-later
- * Text Domain:       sd-grc
+ * Text Domain:       google-reviews
  * Requires PHP:      7.4
  */
 
