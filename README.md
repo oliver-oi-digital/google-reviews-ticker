@@ -10,15 +10,17 @@ Zip this folder as `gdf-google-reviews/` and upload it via **Plugins → Add New
 
 | Shortcode | Output |
 |---|---|
-| `[google_review_count]` | 127 |
-| `[google_review_count animate="yes" round="10" suffix="+"]` | 120+ (counts up when scrolled into view) |
-| `[google_rating]` | 4.9 |
-| `[google_rating display="symbol"]` | ★★★★★ |
-| `[google_rating display="both" position="before"]` | ★ 4.9 |
-| `[google_reviews]` | 4.9 ★ from 127 reviews |
-| `[google_reviews show="rating"]` / `show="count"` | Rating only / count only |
+| `[gdf_google_review_count]` | 127 |
+| `[gdf_google_review_count animate="yes" round="10" suffix="+"]` | 120+ (counts up when scrolled into view) |
+| `[gdf_google_rating]` | 4.9 |
+| `[gdf_google_rating display="symbol"]` | ★★★★★ |
+| `[gdf_google_rating display="both" position="before"]` | ★ 4.9 |
+| `[gdf_google_reviews]` | 4.9 ★ from 127 reviews |
+| `[gdf_google_reviews show="rating"]` / `show="count"` | Rating only / count only |
 
-`[google_rating]` and `[google_reviews]` accept `display` (`number`, `symbol` or `both`), `symbol` (an HTML entity such as `&#9733;`), `position` (`before` or `after`), `repeat` (`yes` or `no`) and `decimals`. `[google_reviews]` also accepts `separator`, `count_prefix`, `count_suffix`, `count_round` and `count_animate`. The default symbol is set on the settings page.
+`[gdf_google_rating]` and `[gdf_google_reviews]` accept `display` (`number`, `symbol` or `both`), `symbol` (an HTML entity such as `&#9733;`), `position` (`before` or `after`), `repeat` (`yes` or `no`) and `decimals`. `[gdf_google_reviews]` also accepts `separator`, `count_prefix`, `count_suffix`, `count_round` and `count_animate`. The default symbol is set on the settings page.
+
+The older unprefixed names (`[google_review_count]`, `[google_rating]`, `[google_reviews]`) still work for existing pages, unless another plugin has already registered them.
 
 ## Ticker
 

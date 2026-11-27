@@ -136,26 +136,45 @@ function sd_grc_fetch() {
 
 /* -------------------------------------------------------------------------
  * Shortcodes
- * [google_review_count]               → 127
- * [google_review_count animate="yes"] → counts up from 0 when scrolled into view
- * [google_review_count round="10" suffix="+"] → 120+
- * [google_rating decimals="1"]        → 4.9
- * [google_rating display="symbol"]    → ★★★★★ (symbol repeated to the rounded rating)
- * [google_rating display="both"]      → 4.9 ★
- * [google_rating display="both" symbol="&#9733;" position="before" repeat="yes"] → ★★★★★ 4.9
+ * [gdf_google_review_count]               → 127
+ * [gdf_google_review_count animate="yes"] → counts up from 0 when scrolled into view
+ * [gdf_google_review_count round="10" suffix="+"] → 120+
+ * [gdf_google_rating decimals="1"]        → 4.9
+ * [gdf_google_rating display="symbol"]    → ★★★★★ (symbol repeated to the rounded rating)
+ * [gdf_google_rating display="both"]      → 4.9 ★
+ * [gdf_google_rating display="both" symbol="&#9733;" position="before" repeat="yes"] → ★★★★★ 4.9
  * ---------------------------------------------------------------------- */
 
-add_shortcode( 'google_review_count', 'sd_grc_count_shortcode' );
-add_shortcode( 'google_rating', 'sd_grc_rating_shortcode' );
-add_shortcode( 'google_reviews', 'sd_grc_reviews_shortcode' );
+add_shortcode( 'gdf_google_review_count', 'sd_grc_count_shortcode' );
+add_shortcode( 'gdf_google_rating', 'sd_grc_rating_shortcode' );
+add_shortcode( 'gdf_google_reviews', 'sd_grc_reviews_shortcode' );
+
+// Legacy unprefixed names, kept so existing pages keep working. Registered late
+// and only if no other plugin has already claimed the name.
+add_action(
+	'init',
+	function () {
+		$legacy = array(
+			'google_review_count' => 'sd_grc_count_shortcode',
+			'google_rating'       => 'sd_grc_rating_shortcode',
+			'google_reviews'      => 'sd_grc_reviews_shortcode',
+		);
+		foreach ( $legacy as $tag => $cb ) {
+			if ( ! shortcode_exists( $tag ) ) {
+				add_shortcode( $tag, $cb );
+			}
+		}
+	},
+	99
+);
 
 /*
  * Combined shortcode: average rating and/or total review count.
- * [google_reviews]                                  → 4.9 ★ from 127 reviews
- * [google_reviews show="rating"]                    → 4.9 ★
- * [google_reviews show="count"]                     → 127 reviews
- * [google_reviews display="symbol" separator=" · "] → ★★★★★ · 127 reviews
- * Accepts every [google_rating] attribute, plus count_animate, count_round,
+ * [gdf_google_reviews]                                  → 4.9 ★ from 127 reviews
+ * [gdf_google_reviews show="rating"]                    → 4.9 ★
+ * [gdf_google_reviews show="count"]                     → 127 reviews
+ * [gdf_google_reviews display="symbol" separator=" · "] → ★★★★★ · 127 reviews
+ * Accepts every [gdf_google_rating] attribute, plus count_animate, count_round,
  * count_prefix, count_suffix and separator.
  */
 function sd_grc_reviews_shortcode( $atts ) {
@@ -422,17 +441,18 @@ function sd_grc_settings_page() {
 					<th><label for="sd_grc_symbol">Rating symbol</label></th>
 					<td><input type="text" id="sd_grc_symbol" name="<?php echo esc_attr( SD_GRC_OPT ); ?>[symbol]" value="<?php echo esc_attr( $s['symbol'] ); ?>" class="small-text">
 					<span style="font-size:1.4em;vertical-align:middle;margin-left:8px"><?php echo esc_html( sd_grc_symbol( $s['symbol'] ) ); ?></span>
-					<p class="description">HTML entity or character used by <code>[google_rating display="symbol"]</code> and <code>display="both"</code>, e.g. <code>&amp;#9733;</code> (★) or <code>&amp;#11088;</code> (⭐). Can be overridden per shortcode with <code>symbol="…"</code>.</p></td>
+					<p class="description">HTML entity or character used by <code>[gdf_google_rating display="symbol"]</code> and <code>display="both"</code>, e.g. <code>&amp;#9733;</code> (★) or <code>&amp;#11088;</code> (⭐). Can be overridden per shortcode with <code>symbol="…"</code>.</p></td>
 				</tr>
 			</table>
 			<?php submit_button(); ?>
 		</form>
 
 		<h2>Usage</h2>
-		<p><code>[google_review_count]</code> &nbsp; <code>[google_review_count animate="yes"]</code> &nbsp; <code>[google_review_count round="10" suffix="+"]</code> &nbsp; <code>[google_rating]</code></p>
-		<p>Rating and/or count in one: <code>[google_reviews]</code> → 4.9 ★ from 127 reviews &nbsp; <code>[google_reviews show="rating"]</code> &nbsp; <code>[google_reviews show="count"]</code> &nbsp; <code>[google_reviews display="symbol" separator=" · "]</code>. Also accepts <code>count_animate</code>, <code>count_round</code>, <code>count_prefix</code>, <code>count_suffix</code>.</p>
-		<p>Rating with a symbol: <code>[google_rating display="symbol"]</code> → ★★★★★ &nbsp; <code>[google_rating display="both"]</code> → 4.9 ★ &nbsp; <code>[google_rating display="both" position="before" repeat="yes"]</code> → ★★★★★ 4.9 &nbsp; <code>[google_rating display="both" symbol="&amp;#11088;"]</code> → 4.9 ⭐</p>
-		<p>Ticker: add a Divi Text module, give it the CSS class <code>sd-ticker</code>, and put the ticker text in it, e.g. <code>★★★★★ Rated [google_rating] from [google_review_count] Google reviews</code>. Optional: <code>sd-ticker--slow</code>, <code>sd-ticker--fast</code>, <code>sd-ticker--reverse</code>.</p>
+		<p><code>[gdf_google_review_count]</code> &nbsp; <code>[gdf_google_review_count animate="yes"]</code> &nbsp; <code>[gdf_google_review_count round="10" suffix="+"]</code> &nbsp; <code>[gdf_google_rating]</code></p>
+		<p>Rating and/or count in one: <code>[gdf_google_reviews]</code> → 4.9 ★ from 127 reviews &nbsp; <code>[gdf_google_reviews show="rating"]</code> &nbsp; <code>[gdf_google_reviews show="count"]</code> &nbsp; <code>[gdf_google_reviews display="symbol" separator=" · "]</code>. Also accepts <code>count_animate</code>, <code>count_round</code>, <code>count_prefix</code>, <code>count_suffix</code>.</p>
+		<p>Rating with a symbol: <code>[gdf_google_rating display="symbol"]</code> → ★★★★★ &nbsp; <code>[gdf_google_rating display="both"]</code> → 4.9 ★ &nbsp; <code>[gdf_google_rating display="both" position="before" repeat="yes"]</code> → ★★★★★ 4.9 &nbsp; <code>[gdf_google_rating display="both" symbol="&amp;#11088;"]</code> → 4.9 ⭐</p>
+		<p><em>The older unprefixed names (<code>[google_review_count]</code>, <code>[google_rating]</code>, <code>[google_reviews]</code>) still work unless another plugin uses them.</em></p>
+		<p>Ticker: add a Divi Text module, give it the CSS class <code>sd-ticker</code>, and put the ticker text in it, e.g. <code>★★★★★ Rated [gdf_google_rating] from [gdf_google_review_count] Google reviews</code>. Optional: <code>sd-ticker--slow</code>, <code>sd-ticker--fast</code>, <code>sd-ticker--reverse</code>.</p>
 	</div>
 	<?php
 }
