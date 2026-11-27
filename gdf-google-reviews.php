@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       Google Review Count
  * Description:       Fetches a business's Google review count and rating on a schedule and outputs it via shortcodes. Includes a lightweight ticker for Divi Text modules.
- * Version:           1.2.0
+ * Version:           1.3.0
  * Author:            Get Digital Fit
  * Author URI:        https://www.getdigitalfit.co.uk
  * License:           GPL-2.0-or-later
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'SD_GRC_VERSION', '1.2.0' );
+define( 'SD_GRC_VERSION', '1.3.0' );
 define( 'SD_GRC_OPT', 'sd_grc_settings' );
 define( 'SD_GRC_DATA', 'sd_grc_data' );
 define( 'SD_GRC_HOOK', 'sd_grc_refresh' );
@@ -25,8 +25,12 @@ define( 'SD_GRC_URL', plugin_dir_url( __FILE__ ) );
  * Settings helpers
  * ---------------------------------------------------------------------- */
 
+/**
+ * Settings with the API key decrypted. 'api_key_error' is true when a key is
+ * stored but can't be decrypted (e.g. the WordPress salts have changed).
+ */
 function sd_grc_settings() {
-	return wp_parse_args(
+	$s = wp_parse_args(
 		get_option( SD_GRC_OPT, array() ),
 		array(
 			'api_key'   => '',
@@ -36,6 +40,62 @@ function sd_grc_settings() {
 			'symbol'    => '&#9733;',
 		)
 	);
+
+	$s['api_key_error'] = false;
+	if ( '' !== $s['api_key'] ) {
+		$plain = sd_grc_decrypt( $s['api_key'] );
+		if ( null === $plain ) {
+			$s['api_key']       = '';
+			$s['api_key_error'] = true;
+		} else {
+			$s['api_key'] = $plain;
+		}
+	}
+	return $s;
+}
+
+/* -------------------------------------------------------------------------
+ * API key encryption
+ * The key is stored encrypted (libsodium secretbox, bundled with WordPress).
+ * The encryption key comes from GDF_GRC_ENCRYPTION_KEY in wp-config.php if
+ * defined, otherwise from the site's AUTH salts. Changing either means the
+ * saved API key has to be entered again.
+ * ---------------------------------------------------------------------- */
+
+define( 'SD_GRC_ENC_PREFIX', 'enc:v1:' );
+
+function sd_grc_crypto_key() {
+	$secret = defined( 'GDF_GRC_ENCRYPTION_KEY' ) ? GDF_GRC_ENCRYPTION_KEY : wp_salt( 'auth' );
+	return hash( 'sha256', 'gdf-google-reviews|' . $secret, true ); // 32 bytes.
+}
+
+function sd_grc_is_encrypted( $value ) {
+	return is_string( $value ) && 0 === strpos( $value, SD_GRC_ENC_PREFIX );
+}
+
+function sd_grc_encrypt( $plain ) {
+	if ( '' === $plain || sd_grc_is_encrypted( $plain ) ) {
+		return $plain;
+	}
+	$nonce = random_bytes( SODIUM_CRYPTO_SECRETBOX_NONCEBYTES );
+	return SD_GRC_ENC_PREFIX . base64_encode( $nonce . sodium_crypto_secretbox( $plain, $nonce, sd_grc_crypto_key() ) );
+}
+
+/** Returns the plain key, or null if it can't be decrypted. Unprefixed (legacy) values are returned as-is. */
+function sd_grc_decrypt( $stored ) {
+	if ( ! sd_grc_is_encrypted( $stored ) ) {
+		return $stored;
+	}
+	$raw = base64_decode( substr( $stored, strlen( SD_GRC_ENC_PREFIX ) ), true );
+	if ( false === $raw || strlen( $raw ) <= SODIUM_CRYPTO_SECRETBOX_NONCEBYTES ) {
+		return null;
+	}
+	$plain = sodium_crypto_secretbox_open(
+		substr( $raw, SODIUM_CRYPTO_SECRETBOX_NONCEBYTES ),
+		substr( $raw, 0, SODIUM_CRYPTO_SECRETBOX_NONCEBYTES ),
+		sd_grc_crypto_key()
+	);
+	return false === $plain ? null : $plain;
 }
 
 function sd_grc_data() {
@@ -89,6 +149,11 @@ function sd_grc_fetch() {
 	$s    = sd_grc_settings();
 	$data = sd_grc_data();
 
+	if ( $s['api_key_error'] ) {
+		$data['last_error'] = 'The saved API key could not be decrypted (the WordPress salts may have changed). Please enter the key again.';
+		update_option( SD_GRC_DATA, $data, false );
+		return false;
+	}
 	if ( empty( $s['api_key'] ) || empty( $s['place_id'] ) ) {
 		$data['last_error'] = 'API key or Place ID missing.';
 		update_option( SD_GRC_DATA, $data, false );
@@ -367,16 +432,30 @@ add_action(
  * "keep the saved key". A new value replaces it; the clear box removes it.
  */
 function sd_grc_sanitize_key( $in ) {
-	$new = sanitize_text_field( $in['api_key'] ?? '' );
-	if ( '' !== $new ) {
-		return $new;
-	}
 	if ( ! empty( $in['api_key_clear'] ) ) {
 		return '';
 	}
+	// Already-encrypted values pass straight through (WordPress can sanitize twice on first save).
+	$new = sanitize_text_field( $in['api_key'] ?? '' );
+	if ( '' !== $new ) {
+		return sd_grc_encrypt( $new );
+	}
 	$saved = get_option( SD_GRC_OPT, array() );
-	return $saved['api_key'] ?? '';
+	return sd_grc_encrypt( $saved['api_key'] ?? '' );
 }
+
+// Encrypt a key saved by an older version of the plugin.
+add_action(
+	'admin_init',
+	function () {
+		$raw = get_option( SD_GRC_OPT, array() );
+		if ( ! empty( $raw['api_key'] ) && ! sd_grc_is_encrypted( $raw['api_key'] ) ) {
+			$raw['api_key'] = sd_grc_encrypt( $raw['api_key'] );
+			update_option( SD_GRC_OPT, $raw );
+		}
+	},
+	20
+);
 
 add_action(
 	'admin_post_sd_grc_fetch_now',
@@ -434,9 +513,12 @@ function sd_grc_settings_page() {
 				<tr>
 					<th><label for="sd_grc_key">Google API key</label></th>
 					<td>
+					<?php if ( $s['api_key_error'] ) : ?>
+						<div class="notice notice-error inline"><p>The saved key can't be decrypted, probably because the WordPress salts have changed. Please paste the key again.</p></div>
+					<?php endif; ?>
 					<?php if ( '' !== $s['api_key'] ) : ?>
 						<input type="password" id="sd_grc_key" name="<?php echo esc_attr( SD_GRC_OPT ); ?>[api_key]" value="" placeholder="••••••••••••••••  (saved)" class="regular-text" autocomplete="new-password">
-						<p class="description"><strong>A key is saved.</strong> It is hidden for security and never sent to the browser. Leave blank to keep it, or paste a new key to replace it.</p>
+						<p class="description"><strong>A key is saved.</strong> It is stored encrypted, hidden for security and never sent to the browser. Leave blank to keep it, or paste a new key to replace it.</p>
 						<label><input type="checkbox" name="<?php echo esc_attr( SD_GRC_OPT ); ?>[api_key_clear]" value="1"> Remove the saved key</label>
 					<?php else : ?>
 						<input type="password" id="sd_grc_key" name="<?php echo esc_attr( SD_GRC_OPT ); ?>[api_key]" value="" class="regular-text" autocomplete="new-password">
