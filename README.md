@@ -4,7 +4,7 @@ WordPress plugin by [Get Digital Fit](https://www.getdigitalfit.co.uk). It fetch
 
 ## Install
 
-Zip this folder as `gdf-google-reviews/` and upload it via **Plugins → Add New → Upload Plugin**. Then go to **Settings → Google Review Count** and add your Google API key and Place ID.
+Zip this folder as `gdf-google-reviews/` and upload it via **Plugins → Add New → Upload Plugin**. Then go to **Settings → Google Review Count** and add your Google API key and Place ID. Once saved, the API key is never shown again or sent to the browser; leave the field blank to keep it, paste a new key to replace it, or tick "Remove the saved key".
 
 ## Shortcodes
 

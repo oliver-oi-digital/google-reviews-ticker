@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       Google Review Count
  * Description:       Fetches a business's Google review count and rating on a schedule and outputs it via shortcodes. Includes a lightweight ticker for Divi Text modules.
- * Version:           1.1.0
+ * Version:           1.2.0
  * Author:            Get Digital Fit
  * Author URI:        https://www.getdigitalfit.co.uk
  * License:           GPL-2.0-or-later
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'SD_GRC_VERSION', '1.1.0' );
+define( 'SD_GRC_VERSION', '1.2.0' );
 define( 'SD_GRC_OPT', 'sd_grc_settings' );
 define( 'SD_GRC_DATA', 'sd_grc_data' );
 define( 'SD_GRC_HOOK', 'sd_grc_refresh' );
@@ -350,7 +350,7 @@ add_action(
 			array(
 				'sanitize_callback' => function ( $in ) {
 					return array(
-						'api_key'   => sanitize_text_field( $in['api_key'] ?? '' ),
+						'api_key'   => sd_grc_sanitize_key( $in ),
 						'place_id'  => sanitize_text_field( $in['place_id'] ?? '' ),
 						'frequency' => ( $in['frequency'] ?? '' ) === 'weekly' ? 'weekly' : 'daily',
 						'fallback'  => absint( $in['fallback'] ?? 0 ) ?: '',
@@ -361,6 +361,22 @@ add_action(
 		);
 	}
 );
+
+/**
+ * The key is never printed back into the form, so an empty field means
+ * "keep the saved key". A new value replaces it; the clear box removes it.
+ */
+function sd_grc_sanitize_key( $in ) {
+	$new = sanitize_text_field( $in['api_key'] ?? '' );
+	if ( '' !== $new ) {
+		return $new;
+	}
+	if ( ! empty( $in['api_key_clear'] ) ) {
+		return '';
+	}
+	$saved = get_option( SD_GRC_OPT, array() );
+	return $saved['api_key'] ?? '';
+}
 
 add_action(
 	'admin_post_sd_grc_fetch_now',
@@ -417,7 +433,14 @@ function sd_grc_settings_page() {
 			<table class="form-table">
 				<tr>
 					<th><label for="sd_grc_key">Google API key</label></th>
-					<td><input type="password" id="sd_grc_key" name="<?php echo esc_attr( SD_GRC_OPT ); ?>[api_key]" value="<?php echo esc_attr( $s['api_key'] ); ?>" class="regular-text" autocomplete="off">
+					<td>
+					<?php if ( '' !== $s['api_key'] ) : ?>
+						<input type="password" id="sd_grc_key" name="<?php echo esc_attr( SD_GRC_OPT ); ?>[api_key]" value="" placeholder="••••••••••••••••  (saved)" class="regular-text" autocomplete="new-password">
+						<p class="description"><strong>A key is saved.</strong> It is hidden for security and never sent to the browser. Leave blank to keep it, or paste a new key to replace it.</p>
+						<label><input type="checkbox" name="<?php echo esc_attr( SD_GRC_OPT ); ?>[api_key_clear]" value="1"> Remove the saved key</label>
+					<?php else : ?>
+						<input type="password" id="sd_grc_key" name="<?php echo esc_attr( SD_GRC_OPT ); ?>[api_key]" value="" class="regular-text" autocomplete="new-password">
+					<?php endif; ?>
 					<p class="description">Places API (New) must be enabled for this key. Restrict the key to Places API and the server's IP.</p></td>
 				</tr>
 				<tr>
