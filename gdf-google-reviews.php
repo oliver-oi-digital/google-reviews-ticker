@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       Google Review Count
  * Description:       Fetches a business's Google review count and rating on a schedule and outputs it via shortcodes. Includes a lightweight ticker for Divi Text modules.
- * Version:           1.4.0
+ * Version:           1.5.0
  * Author:            Get Digital Fit
  * Author URI:        https://www.getdigitalfit.co.uk
  * License:           GPL-2.0-or-later
@@ -15,11 +15,13 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'SD_GRC_VERSION', '1.4.0' );
+define( 'SD_GRC_VERSION', '1.5.0' );
 define( 'SD_GRC_OPT', 'sd_grc_settings' );
 define( 'SD_GRC_DATA', 'sd_grc_data' );
 define( 'SD_GRC_HOOK', 'sd_grc_refresh' );
 define( 'SD_GRC_URL', plugin_dir_url( __FILE__ ) );
+
+require_once __DIR__ . '/includes/file-utils.php';
 
 /* -------------------------------------------------------------------------
  * Settings helpers
@@ -38,6 +40,7 @@ function sd_grc_settings() {
 			'frequency' => 'daily',
 			'fallback'  => '',
 			'symbol'    => '&#9733;',
+			'symbol_color' => '',
 		)
 	);
 
@@ -64,6 +67,14 @@ function sd_grc_settings() {
 
 define( 'SD_GRC_ENC_PREFIX', 'enc:v1:' );
 
+/** True if libsodium (PHP extension or WordPress's bundled sodium_compat) is available. */
+function sd_grc_crypto_available() {
+	if ( ! function_exists( 'sodium_crypto_secretbox' ) && file_exists( ABSPATH . WPINC . '/sodium_compat/autoload.php' ) ) {
+		require_once ABSPATH . WPINC . '/sodium_compat/autoload.php';
+	}
+	return function_exists( 'sodium_crypto_secretbox' ) && function_exists( 'sodium_crypto_secretbox_open' ) && defined( 'SODIUM_CRYPTO_SECRETBOX_NONCEBYTES' );
+}
+
 function sd_grc_crypto_key() {
 	$secret = defined( 'GDF_GRC_ENCRYPTION_KEY' ) ? GDF_GRC_ENCRYPTION_KEY : wp_salt( 'auth' );
 	return hash( 'sha256', 'gdf-google-reviews|' . $secret, true ); // 32 bytes.
@@ -74,8 +85,8 @@ function sd_grc_is_encrypted( $value ) {
 }
 
 function sd_grc_encrypt( $plain ) {
-	if ( '' === $plain || sd_grc_is_encrypted( $plain ) ) {
-		return $plain;
+	if ( '' === $plain || sd_grc_is_encrypted( $plain ) || ! sd_grc_crypto_available() ) {
+		return $plain; // Without libsodium the key is stored unencrypted; the settings page warns about this.
 	}
 	$nonce = random_bytes( SODIUM_CRYPTO_SECRETBOX_NONCEBYTES );
 	return SD_GRC_ENC_PREFIX . base64_encode( $nonce . sodium_crypto_secretbox( $plain, $nonce, sd_grc_crypto_key() ) );
@@ -85,6 +96,9 @@ function sd_grc_encrypt( $plain ) {
 function sd_grc_decrypt( $stored ) {
 	if ( ! sd_grc_is_encrypted( $stored ) ) {
 		return $stored;
+	}
+	if ( ! sd_grc_crypto_available() ) {
+		return null;
 	}
 	$raw = base64_decode( substr( $stored, strlen( SD_GRC_ENC_PREFIX ) ), true );
 	if ( false === $raw || strlen( $raw ) <= SODIUM_CRYPTO_SECRETBOX_NONCEBYTES ) {
@@ -252,6 +266,7 @@ function sd_grc_reviews_shortcode( $atts ) {
 			'symbol'        => '',
 			'position'      => 'after',
 			'repeat'        => '',
+			'color'         => '',
 			'count_animate' => 'no',
 			'count_round'   => 0,
 			'count_prefix'  => '',
@@ -272,6 +287,7 @@ function sd_grc_reviews_shortcode( $atts ) {
 				'symbol'   => $a['symbol'],
 				'position' => $a['position'],
 				'repeat'   => $a['repeat'],
+				'color'    => $a['color'],
 			)
 		);
 	}
@@ -340,6 +356,7 @@ function sd_grc_rating_shortcode( $atts ) {
 			'symbol'   => '',       // HTML entity or character; defaults to the setting.
 			'position' => 'after',  // before | after (for display="both")
 			'repeat'   => '',       // yes | no; defaults to yes for "symbol", no for "both"
+			'color'    => '',       // Symbol colour, e.g. #f5b301; defaults to the setting.
 		),
 		$atts,
 		'google_rating'
@@ -360,7 +377,9 @@ function sd_grc_rating_shortcode( $atts ) {
 	$symbol = sd_grc_symbol( '' !== $a['symbol'] ? $a['symbol'] : sd_grc_settings()['symbol'] );
 	$repeat = '' === $a['repeat'] ? 'symbol' === $display : in_array( strtolower( $a['repeat'] ), array( 'yes', '1', 'true' ), true );
 	$times  = $repeat ? max( 1, min( 5, (int) round( $rating ) ) ) : 1;
-	$sym    = '<span class="sd-grc-symbol" aria-hidden="true">' . str_repeat( esc_html( $symbol ), $times ) . '</span>';
+	$color  = sd_grc_hex_color( '' !== $a['color'] ? $a['color'] : sd_grc_settings()['symbol_color'] );
+	$style  = $color ? ' style="color:' . esc_attr( $color ) . '"' : '';
+	$sym    = '<span class="sd-grc-symbol"' . $style . ' aria-hidden="true">' . str_repeat( esc_html( $symbol ), $times ) . '</span>';
 
 	if ( 'symbol' === $display ) {
 		/* translators: %s: rating number */
@@ -374,6 +393,12 @@ function sd_grc_rating_shortcode( $atts ) {
  * Turn an HTML entity (e.g. &#9733; or &starf;) or a literal character into plain text.
  * Tags are stripped; the result is escaped on output.
  */
+/** A #rgb or #rrggbb colour (the # is optional on input), or '' if invalid. */
+function sd_grc_hex_color( $raw ) {
+	$raw = trim( (string) $raw );
+	return '' === $raw ? '' : (string) sanitize_hex_color( '#' . ltrim( $raw, '#' ) );
+}
+
 function sd_grc_symbol( $raw ) {
 	$raw = wp_strip_all_tags( (string) $raw );
 	// The block/Divi editors may store the ampersand encoded (&amp;#9733;), so decode twice.
@@ -400,6 +425,18 @@ add_action(
  * ---------------------------------------------------------------------- */
 
 add_action(
+	'admin_enqueue_scripts',
+	function ( $hook ) {
+		if ( 'settings_page_sd-grc' !== $hook ) {
+			return;
+		}
+		wp_enqueue_style( 'wp-color-picker' );
+		wp_enqueue_script( 'wp-color-picker' );
+		wp_add_inline_script( 'wp-color-picker', 'jQuery(function($){$(".sd-grc-color").wpColorPicker();});' );
+	}
+);
+
+add_action(
 	'admin_menu',
 	function () {
 		add_options_page( 'Google Review Count', 'Google Review Count', 'manage_options', 'sd-grc', 'sd_grc_settings_page' );
@@ -414,12 +451,16 @@ add_action(
 			SD_GRC_OPT,
 			array(
 				'sanitize_callback' => function ( $in ) {
+					if ( ! is_array( $in ) ) {
+						$in = array();
+					}
 					return array(
 						'api_key'   => sd_grc_sanitize_key( $in ),
 						'place_id'  => sanitize_text_field( $in['place_id'] ?? '' ),
 						'frequency' => ( $in['frequency'] ?? '' ) === 'weekly' ? 'weekly' : 'daily',
 						'fallback'  => absint( $in['fallback'] ?? 0 ) ?: '',
 						'symbol'    => wp_strip_all_tags( $in['symbol'] ?? '' ) ?: '&#9733;',
+						'symbol_color' => sd_grc_hex_color( $in['symbol_color'] ?? '' ),
 					);
 				},
 			)
@@ -454,22 +495,49 @@ function sd_grc_sanitize_key( $in ) {
 
 define( 'SD_GRC_WPCONFIG_MARK', '// GDF Google Reviews: encryption key for the stored Google API key. Do not change.' );
 
-function sd_grc_wpconfig_path() {
-	if ( file_exists( ABSPATH . 'wp-config.php' ) ) {
-		return ABSPATH . 'wp-config.php';
+/**
+ * A lock so two admin requests can't both add a key at once. INSERT IGNORE on
+ * the options table's unique option_name is atomic; add_option() isn't.
+ * A lock older than a minute is treated as abandoned.
+ */
+function sd_grc_lock() {
+	global $wpdb;
+	$sql = $wpdb->prepare( "INSERT IGNORE INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'no')", 'sd_grc_wpconfig_lock', (string) time() );
+	if ( 1 === (int) $wpdb->query( $sql ) ) { // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery
+		return true;
 	}
-	$up = dirname( ABSPATH ) . '/wp-config.php';
-	if ( file_exists( $up ) && ! file_exists( dirname( ABSPATH ) . '/wp-settings.php' ) ) {
-		return $up;
+	$since = (int) $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", 'sd_grc_wpconfig_lock' ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
+	if ( $since && $since < time() - MINUTE_IN_SECONDS ) {
+		sd_grc_unlock();
+		return 1 === (int) $wpdb->query( $sql ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery
 	}
-	return '';
+	return false;
 }
 
-/** Adds GDF_GRC_ENCRYPTION_KEY to wp-config.php and re-encrypts the saved API key. Returns true on success. */
+function sd_grc_unlock() {
+	global $wpdb;
+	$wpdb->delete( $wpdb->options, array( 'option_name' => 'sd_grc_wpconfig_lock' ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
+}
+
+/**
+ * Adds GDF_GRC_ENCRYPTION_KEY to wp-config.php and re-encrypts the saved API key.
+ * Returns true on success, false on failure, null if another request is doing it.
+ */
 function sd_grc_install_encryption_key() {
 	if ( defined( 'GDF_GRC_ENCRYPTION_KEY' ) ) {
 		return true;
 	}
+	if ( ! sd_grc_lock() ) {
+		return null;
+	}
+	try {
+		return sd_grc_install_encryption_key_locked();
+	} finally {
+		sd_grc_unlock();
+	}
+}
+
+function sd_grc_install_encryption_key_locked() {
 	$path = sd_grc_wpconfig_path();
 	if ( ! $path || ! is_writable( $path ) ) {
 		return false;
@@ -499,8 +567,7 @@ function sd_grc_install_encryption_key() {
 	$raw   = get_option( SD_GRC_OPT, array() );
 	$plain = ! empty( $raw['api_key'] ) ? sd_grc_decrypt( $raw['api_key'] ) : '';
 
-	if ( strlen( $new ) !== file_put_contents( $path, $new, LOCK_EX ) || file_get_contents( $path ) !== $new ) { // phpcs:ignore WordPress.WP.AlternativeFunctions
-		file_put_contents( $path, $orig, LOCK_EX ); // phpcs:ignore WordPress.WP.AlternativeFunctions
+	if ( ! sd_grc_write_file( $path, $new ) ) {
 		return false;
 	}
 
@@ -521,7 +588,7 @@ add_action(
 		if ( defined( 'GDF_GRC_ENCRYPTION_KEY' ) || ! current_user_can( 'manage_options' ) || get_transient( 'sd_grc_wpconfig_failed' ) ) {
 			return;
 		}
-		if ( ! sd_grc_install_encryption_key() ) {
+		if ( false === sd_grc_install_encryption_key() ) { // null = another request is busy; try again next time.
 			set_transient( 'sd_grc_wpconfig_failed', 1, DAY_IN_SECONDS ); // Don't retry on every page load.
 		}
 	},
@@ -533,7 +600,7 @@ add_action(
 	'admin_init',
 	function () {
 		$raw = get_option( SD_GRC_OPT, array() );
-		if ( ! empty( $raw['api_key'] ) && ! sd_grc_is_encrypted( $raw['api_key'] ) ) {
+		if ( ! empty( $raw['api_key'] ) && ! sd_grc_is_encrypted( $raw['api_key'] ) && sd_grc_crypto_available() ) {
 			$raw['api_key'] = sd_grc_encrypt( $raw['api_key'] );
 			update_option( SD_GRC_OPT, $raw );
 		}
@@ -590,6 +657,9 @@ function sd_grc_settings_page() {
 			<?php submit_button( 'Fetch now', 'secondary', 'submit', false ); ?>
 		</form>
 
+		<?php if ( ! sd_grc_crypto_available() ) : ?>
+			<div class="notice notice-error inline"><p>This server's PHP has no libsodium support, so the API key can't be encrypted and is stored as plain text. Ask your host to enable the PHP <code>sodium</code> extension.</p></div>
+		<?php endif; ?>
 		<?php if ( ! defined( 'GDF_GRC_ENCRYPTION_KEY' ) ) : ?>
 			<div class="notice notice-warning inline"><p>The plugin couldn't add its encryption key to <code>wp-config.php</code> (the file isn't writable), so the API key is encrypted with the site's salts instead. For a key that survives salt changes, add these lines to <code>wp-config.php</code> above <em>"That's all, stop editing"</em>, then enter the API key again:</p>
 			<pre style="background:#f6f7f7;padding:8px;user-select:all"><?php echo esc_html( SD_GRC_WPCONFIG_MARK . "\n" . "define( 'GDF_GRC_ENCRYPTION_KEY', '" . bin2hex( random_bytes( 32 ) ) . "' );" ); ?></pre></div>
@@ -637,6 +707,11 @@ function sd_grc_settings_page() {
 					<span style="font-size:1.4em;vertical-align:middle;margin-left:8px"><?php echo esc_html( sd_grc_symbol( $s['symbol'] ) ); ?></span>
 					<p class="description">HTML entity or character used by <code>[gdf_google_rating display="symbol"]</code> and <code>display="both"</code>, e.g. <code>&amp;#9733;</code> (★) or <code>&amp;#11088;</code> (⭐). Can be overridden per shortcode with <code>symbol="…"</code>.</p></td>
 				</tr>
+				<tr>
+					<th><label for="sd_grc_symbol_color">Symbol colour</label></th>
+					<td><input type="text" id="sd_grc_symbol_color" name="<?php echo esc_attr( SD_GRC_OPT ); ?>[symbol_color]" value="<?php echo esc_attr( $s['symbol_color'] ); ?>" class="sd-grc-color" data-default-color="" placeholder="#f5b301">
+					<p class="description">Hex colour for the rating symbol, e.g. <code>#f5b301</code>. Leave blank to use the surrounding text colour. Can be overridden per shortcode with <code>color="#…"</code>.</p></td>
+				</tr>
 			</table>
 			<?php submit_button(); ?>
 		</form>
@@ -644,7 +719,7 @@ function sd_grc_settings_page() {
 		<h2>Usage</h2>
 		<p><code>[gdf_google_review_count]</code> &nbsp; <code>[gdf_google_review_count animate="yes"]</code> &nbsp; <code>[gdf_google_review_count round="10" suffix="+"]</code> &nbsp; <code>[gdf_google_rating]</code></p>
 		<p>Rating and/or count in one: <code>[gdf_google_reviews]</code> → 4.9 ★ from 127 reviews &nbsp; <code>[gdf_google_reviews show="rating"]</code> &nbsp; <code>[gdf_google_reviews show="count"]</code> &nbsp; <code>[gdf_google_reviews display="symbol" separator=" · "]</code>. Also accepts <code>count_animate</code>, <code>count_round</code>, <code>count_prefix</code>, <code>count_suffix</code>.</p>
-		<p>Rating with a symbol: <code>[gdf_google_rating display="symbol"]</code> → ★★★★★ &nbsp; <code>[gdf_google_rating display="both"]</code> → 4.9 ★ &nbsp; <code>[gdf_google_rating display="both" position="before" repeat="yes"]</code> → ★★★★★ 4.9 &nbsp; <code>[gdf_google_rating display="both" symbol="&amp;#11088;"]</code> → 4.9 ⭐</p>
+		<p>Rating with a symbol: <code>[gdf_google_rating display="symbol"]</code> → ★★★★★ &nbsp; <code>[gdf_google_rating display="both"]</code> → 4.9 ★ &nbsp; <code>[gdf_google_rating display="both" position="before" repeat="yes"]</code> → ★★★★★ 4.9 &nbsp; <code>[gdf_google_rating display="both" symbol="&amp;#11088;"]</code> → 4.9 ⭐ &nbsp; <code>[gdf_google_rating display="symbol" color="#f5b301"]</code> → gold stars</p>
 		<p><em>The older unprefixed names (<code>[google_review_count]</code>, <code>[google_rating]</code>, <code>[google_reviews]</code>) still work unless another plugin uses them.</em></p>
 		<p>Ticker: add a Divi Text module, give it the CSS class <code>sd-ticker</code>, and put the ticker text in it, e.g. <code>★★★★★ Rated [gdf_google_rating] from [gdf_google_review_count] Google reviews</code>. Optional: <code>sd-ticker--slow</code>, <code>sd-ticker--fast</code>, <code>sd-ticker--reverse</code>.</p>
 	</div>
