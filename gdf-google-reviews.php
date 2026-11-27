@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       Google Review Count
  * Description:       Fetches a business's Google review count and rating on a schedule and outputs it via shortcodes. Includes a lightweight ticker for Divi Text modules.
- * Version:           1.3.0
+ * Version:           1.4.0
  * Author:            Get Digital Fit
  * Author URI:        https://www.getdigitalfit.co.uk
  * License:           GPL-2.0-or-later
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'SD_GRC_VERSION', '1.3.0' );
+define( 'SD_GRC_VERSION', '1.4.0' );
 define( 'SD_GRC_OPT', 'sd_grc_settings' );
 define( 'SD_GRC_DATA', 'sd_grc_data' );
 define( 'SD_GRC_HOOK', 'sd_grc_refresh' );
@@ -444,6 +444,90 @@ function sd_grc_sanitize_key( $in ) {
 	return sd_grc_encrypt( $saved['api_key'] ?? '' );
 }
 
+/* -------------------------------------------------------------------------
+ * Dedicated encryption key in wp-config.php
+ * On activation (and on admin pages until it succeeds) the plugin generates a
+ * random key and adds it to wp-config.php, so the API key no longer depends on
+ * the site's salts. If wp-config.php can't be written safely, nothing is
+ * changed and the salts are used; the settings page shows the line to add.
+ * ---------------------------------------------------------------------- */
+
+define( 'SD_GRC_WPCONFIG_MARK', '// GDF Google Reviews: encryption key for the stored Google API key. Do not change.' );
+
+function sd_grc_wpconfig_path() {
+	if ( file_exists( ABSPATH . 'wp-config.php' ) ) {
+		return ABSPATH . 'wp-config.php';
+	}
+	$up = dirname( ABSPATH ) . '/wp-config.php';
+	if ( file_exists( $up ) && ! file_exists( dirname( ABSPATH ) . '/wp-settings.php' ) ) {
+		return $up;
+	}
+	return '';
+}
+
+/** Adds GDF_GRC_ENCRYPTION_KEY to wp-config.php and re-encrypts the saved API key. Returns true on success. */
+function sd_grc_install_encryption_key() {
+	if ( defined( 'GDF_GRC_ENCRYPTION_KEY' ) ) {
+		return true;
+	}
+	$path = sd_grc_wpconfig_path();
+	if ( ! $path || ! is_writable( $path ) ) {
+		return false;
+	}
+	$orig = file_get_contents( $path ); // phpcs:ignore WordPress.WP.AlternativeFunctions
+	if ( false === $orig || false !== strpos( $orig, 'GDF_GRC_ENCRYPTION_KEY' ) ) {
+		return false; // Unreadable, or already there but not loaded: leave it alone.
+	}
+
+	// Insert just above the "stop editing" comment, or failing that above the wp-settings.php require.
+	$pos = strpos( $orig, "/* That's all, stop editing" );
+	if ( false === $pos && preg_match( '/require_once\s*\(?\s*ABSPATH\s*\.\s*[\'"]wp-settings\.php/', $orig, $m, PREG_OFFSET_CAPTURE ) ) {
+		$pos = $m[0][1];
+	}
+	if ( false === $pos ) {
+		return false;
+	}
+	$pos = strrpos( substr( $orig, 0, $pos ), "\n" );
+	$pos = false === $pos ? 0 : $pos + 1; // Start of that line.
+
+	$secret = bin2hex( random_bytes( 32 ) );
+	$eol    = false !== strpos( $orig, "\r\n" ) ? "\r\n" : "\n";
+	$insert = SD_GRC_WPCONFIG_MARK . $eol . "define( 'GDF_GRC_ENCRYPTION_KEY', '" . $secret . "' );" . $eol . $eol;
+	$new    = substr( $orig, 0, $pos ) . $insert . substr( $orig, $pos );
+
+	// Decrypt the saved API key with the current (salt-based) key before switching.
+	$raw   = get_option( SD_GRC_OPT, array() );
+	$plain = ! empty( $raw['api_key'] ) ? sd_grc_decrypt( $raw['api_key'] ) : '';
+
+	if ( strlen( $new ) !== file_put_contents( $path, $new, LOCK_EX ) || file_get_contents( $path ) !== $new ) { // phpcs:ignore WordPress.WP.AlternativeFunctions
+		file_put_contents( $path, $orig, LOCK_EX ); // phpcs:ignore WordPress.WP.AlternativeFunctions
+		return false;
+	}
+
+	define( 'GDF_GRC_ENCRYPTION_KEY', $secret );
+	if ( $plain ) {
+		$raw['api_key'] = sd_grc_encrypt( $plain );
+		update_option( SD_GRC_OPT, $raw );
+	}
+	delete_transient( 'sd_grc_wpconfig_failed' );
+	return true;
+}
+
+register_activation_hook( __FILE__, 'sd_grc_install_encryption_key' );
+
+add_action(
+	'admin_init',
+	function () {
+		if ( defined( 'GDF_GRC_ENCRYPTION_KEY' ) || ! current_user_can( 'manage_options' ) || get_transient( 'sd_grc_wpconfig_failed' ) ) {
+			return;
+		}
+		if ( ! sd_grc_install_encryption_key() ) {
+			set_transient( 'sd_grc_wpconfig_failed', 1, DAY_IN_SECONDS ); // Don't retry on every page load.
+		}
+	},
+	15
+);
+
 // Encrypt a key saved by an older version of the plugin.
 add_action(
 	'admin_init',
@@ -505,6 +589,11 @@ function sd_grc_settings_page() {
 			<?php wp_nonce_field( 'sd_grc_fetch_now' ); ?>
 			<?php submit_button( 'Fetch now', 'secondary', 'submit', false ); ?>
 		</form>
+
+		<?php if ( ! defined( 'GDF_GRC_ENCRYPTION_KEY' ) ) : ?>
+			<div class="notice notice-warning inline"><p>The plugin couldn't add its encryption key to <code>wp-config.php</code> (the file isn't writable), so the API key is encrypted with the site's salts instead. For a key that survives salt changes, add these lines to <code>wp-config.php</code> above <em>"That's all, stop editing"</em>, then enter the API key again:</p>
+			<pre style="background:#f6f7f7;padding:8px;user-select:all"><?php echo esc_html( SD_GRC_WPCONFIG_MARK . "\n" . "define( 'GDF_GRC_ENCRYPTION_KEY', '" . bin2hex( random_bytes( 32 ) ) . "' );" ); ?></pre></div>
+		<?php endif; ?>
 
 		<h2>Settings</h2>
 		<form method="post" action="options.php">

@@ -8,15 +8,13 @@ Zip this folder as `gdf-google-reviews/` and upload it via **Plugins → Add New
 
 ### API key security
 
-The API key is stored encrypted in the database (libsodium, bundled with WordPress). By default the encryption key is derived from the site's `AUTH_KEY`/`AUTH_SALT` in `wp-config.php`. If those salts are regenerated (some security plugins do this), the saved API key can't be decrypted and must be entered again; the settings page will say so.
+The API key is stored encrypted in the database (libsodium, bundled with WordPress) and is never shown on the settings page or sent to the browser.
 
-To avoid that, define a dedicated key in `wp-config.php` **before** saving the API key:
+On activation the plugin generates a random 64-character encryption key and adds it to `wp-config.php` as `GDF_GRC_ENCRYPTION_KEY`, just above the "That's all, stop editing" line. It only does this if `wp-config.php` is writable; it checks the write and puts the original back if anything doesn't match. Any API key that's already saved is re-encrypted with the new key.
 
-```php
-define( 'GDF_GRC_ENCRYPTION_KEY', 'a-long-random-string' );
-```
+If `wp-config.php` isn't writable, the plugin falls back to the site's `AUTH_KEY`/`AUTH_SALT` and the settings page shows the exact lines to paste in manually (then re-enter the API key). It retries the automatic write once a day.
 
-Keys saved by older versions of the plugin are encrypted automatically the next time an admin page loads.
+Keep `GDF_GRC_ENCRYPTION_KEY` when moving the site. If it's lost or changed, the saved API key can't be decrypted and must be entered again; the settings page will say so. Deleting the plugin removes the line from `wp-config.php`.
 
 ## Shortcodes
 
