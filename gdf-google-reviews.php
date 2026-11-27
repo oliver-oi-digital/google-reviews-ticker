@@ -2,19 +2,20 @@
 /**
  * Plugin Name:       Google Review Count
  * Description:       Fetches a business's Google review count and rating on a schedule and outputs it via shortcodes. Includes a lightweight ticker for Divi Text modules.
- * Version:           1.1.0
+ * Version:           1.4.0
  * Author:            Get Digital Fit
  * Author URI:        https://www.getdigitalfit.co.uk
  * License:           GPL-2.0-or-later
- * Text Domain:       sd-grc
+ * Text Domain:       gdf-google-reviews
  * Requires PHP:      7.4
+ * Update URI:        false
  */
 
 if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'SD_GRC_VERSION', '1.1.0' );
+define( 'SD_GRC_VERSION', '1.4.0' );
 define( 'SD_GRC_OPT', 'sd_grc_settings' );
 define( 'SD_GRC_DATA', 'sd_grc_data' );
 define( 'SD_GRC_HOOK', 'sd_grc_refresh' );
@@ -24,8 +25,12 @@ define( 'SD_GRC_URL', plugin_dir_url( __FILE__ ) );
  * Settings helpers
  * ---------------------------------------------------------------------- */
 
+/**
+ * Settings with the API key decrypted. 'api_key_error' is true when a key is
+ * stored but can't be decrypted (e.g. the WordPress salts have changed).
+ */
 function sd_grc_settings() {
-	return wp_parse_args(
+	$s = wp_parse_args(
 		get_option( SD_GRC_OPT, array() ),
 		array(
 			'api_key'   => '',
@@ -35,6 +40,62 @@ function sd_grc_settings() {
 			'symbol'    => '&#9733;',
 		)
 	);
+
+	$s['api_key_error'] = false;
+	if ( '' !== $s['api_key'] ) {
+		$plain = sd_grc_decrypt( $s['api_key'] );
+		if ( null === $plain ) {
+			$s['api_key']       = '';
+			$s['api_key_error'] = true;
+		} else {
+			$s['api_key'] = $plain;
+		}
+	}
+	return $s;
+}
+
+/* -------------------------------------------------------------------------
+ * API key encryption
+ * The key is stored encrypted (libsodium secretbox, bundled with WordPress).
+ * The encryption key comes from GDF_GRC_ENCRYPTION_KEY in wp-config.php if
+ * defined, otherwise from the site's AUTH salts. Changing either means the
+ * saved API key has to be entered again.
+ * ---------------------------------------------------------------------- */
+
+define( 'SD_GRC_ENC_PREFIX', 'enc:v1:' );
+
+function sd_grc_crypto_key() {
+	$secret = defined( 'GDF_GRC_ENCRYPTION_KEY' ) ? GDF_GRC_ENCRYPTION_KEY : wp_salt( 'auth' );
+	return hash( 'sha256', 'gdf-google-reviews|' . $secret, true ); // 32 bytes.
+}
+
+function sd_grc_is_encrypted( $value ) {
+	return is_string( $value ) && 0 === strpos( $value, SD_GRC_ENC_PREFIX );
+}
+
+function sd_grc_encrypt( $plain ) {
+	if ( '' === $plain || sd_grc_is_encrypted( $plain ) ) {
+		return $plain;
+	}
+	$nonce = random_bytes( SODIUM_CRYPTO_SECRETBOX_NONCEBYTES );
+	return SD_GRC_ENC_PREFIX . base64_encode( $nonce . sodium_crypto_secretbox( $plain, $nonce, sd_grc_crypto_key() ) );
+}
+
+/** Returns the plain key, or null if it can't be decrypted. Unprefixed (legacy) values are returned as-is. */
+function sd_grc_decrypt( $stored ) {
+	if ( ! sd_grc_is_encrypted( $stored ) ) {
+		return $stored;
+	}
+	$raw = base64_decode( substr( $stored, strlen( SD_GRC_ENC_PREFIX ) ), true );
+	if ( false === $raw || strlen( $raw ) <= SODIUM_CRYPTO_SECRETBOX_NONCEBYTES ) {
+		return null;
+	}
+	$plain = sodium_crypto_secretbox_open(
+		substr( $raw, SODIUM_CRYPTO_SECRETBOX_NONCEBYTES ),
+		substr( $raw, 0, SODIUM_CRYPTO_SECRETBOX_NONCEBYTES ),
+		sd_grc_crypto_key()
+	);
+	return false === $plain ? null : $plain;
 }
 
 function sd_grc_data() {
@@ -88,6 +149,11 @@ function sd_grc_fetch() {
 	$s    = sd_grc_settings();
 	$data = sd_grc_data();
 
+	if ( $s['api_key_error'] ) {
+		$data['last_error'] = 'The saved API key could not be decrypted (the WordPress salts may have changed). Please enter the key again.';
+		update_option( SD_GRC_DATA, $data, false );
+		return false;
+	}
 	if ( empty( $s['api_key'] ) || empty( $s['place_id'] ) ) {
 		$data['last_error'] = 'API key or Place ID missing.';
 		update_option( SD_GRC_DATA, $data, false );
@@ -135,26 +201,45 @@ function sd_grc_fetch() {
 
 /* -------------------------------------------------------------------------
  * Shortcodes
- * [google_review_count]               → 127
- * [google_review_count animate="yes"] → counts up from 0 when scrolled into view
- * [google_review_count round="10" suffix="+"] → 120+
- * [google_rating decimals="1"]        → 4.9
- * [google_rating display="symbol"]    → ★★★★★ (symbol repeated to the rounded rating)
- * [google_rating display="both"]      → 4.9 ★
- * [google_rating display="both" symbol="&#9733;" position="before" repeat="yes"] → ★★★★★ 4.9
+ * [gdf_google_review_count]               → 127
+ * [gdf_google_review_count animate="yes"] → counts up from 0 when scrolled into view
+ * [gdf_google_review_count round="10" suffix="+"] → 120+
+ * [gdf_google_rating decimals="1"]        → 4.9
+ * [gdf_google_rating display="symbol"]    → ★★★★★ (symbol repeated to the rounded rating)
+ * [gdf_google_rating display="both"]      → 4.9 ★
+ * [gdf_google_rating display="both" symbol="&#9733;" position="before" repeat="yes"] → ★★★★★ 4.9
  * ---------------------------------------------------------------------- */
 
-add_shortcode( 'google_review_count', 'sd_grc_count_shortcode' );
-add_shortcode( 'google_rating', 'sd_grc_rating_shortcode' );
-add_shortcode( 'google_reviews', 'sd_grc_reviews_shortcode' );
+add_shortcode( 'gdf_google_review_count', 'sd_grc_count_shortcode' );
+add_shortcode( 'gdf_google_rating', 'sd_grc_rating_shortcode' );
+add_shortcode( 'gdf_google_reviews', 'sd_grc_reviews_shortcode' );
+
+// Legacy unprefixed names, kept so existing pages keep working. Registered late
+// and only if no other plugin has already claimed the name.
+add_action(
+	'init',
+	function () {
+		$legacy = array(
+			'google_review_count' => 'sd_grc_count_shortcode',
+			'google_rating'       => 'sd_grc_rating_shortcode',
+			'google_reviews'      => 'sd_grc_reviews_shortcode',
+		);
+		foreach ( $legacy as $tag => $cb ) {
+			if ( ! shortcode_exists( $tag ) ) {
+				add_shortcode( $tag, $cb );
+			}
+		}
+	},
+	99
+);
 
 /*
  * Combined shortcode: average rating and/or total review count.
- * [google_reviews]                                  → 4.9 ★ from 127 reviews
- * [google_reviews show="rating"]                    → 4.9 ★
- * [google_reviews show="count"]                     → 127 reviews
- * [google_reviews display="symbol" separator=" · "] → ★★★★★ · 127 reviews
- * Accepts every [google_rating] attribute, plus count_animate, count_round,
+ * [gdf_google_reviews]                                  → 4.9 ★ from 127 reviews
+ * [gdf_google_reviews show="rating"]                    → 4.9 ★
+ * [gdf_google_reviews show="count"]                     → 127 reviews
+ * [gdf_google_reviews display="symbol" separator=" · "] → ★★★★★ · 127 reviews
+ * Accepts every [gdf_google_rating] attribute, plus count_animate, count_round,
  * count_prefix, count_suffix and separator.
  */
 function sd_grc_reviews_shortcode( $atts ) {
@@ -330,7 +415,7 @@ add_action(
 			array(
 				'sanitize_callback' => function ( $in ) {
 					return array(
-						'api_key'   => sanitize_text_field( $in['api_key'] ?? '' ),
+						'api_key'   => sd_grc_sanitize_key( $in ),
 						'place_id'  => sanitize_text_field( $in['place_id'] ?? '' ),
 						'frequency' => ( $in['frequency'] ?? '' ) === 'weekly' ? 'weekly' : 'daily',
 						'fallback'  => absint( $in['fallback'] ?? 0 ) ?: '',
@@ -340,6 +425,120 @@ add_action(
 			)
 		);
 	}
+);
+
+/**
+ * The key is never printed back into the form, so an empty field means
+ * "keep the saved key". A new value replaces it; the clear box removes it.
+ */
+function sd_grc_sanitize_key( $in ) {
+	if ( ! empty( $in['api_key_clear'] ) ) {
+		return '';
+	}
+	// Already-encrypted values pass straight through (WordPress can sanitize twice on first save).
+	$new = sanitize_text_field( $in['api_key'] ?? '' );
+	if ( '' !== $new ) {
+		return sd_grc_encrypt( $new );
+	}
+	$saved = get_option( SD_GRC_OPT, array() );
+	return sd_grc_encrypt( $saved['api_key'] ?? '' );
+}
+
+/* -------------------------------------------------------------------------
+ * Dedicated encryption key in wp-config.php
+ * On activation (and on admin pages until it succeeds) the plugin generates a
+ * random key and adds it to wp-config.php, so the API key no longer depends on
+ * the site's salts. If wp-config.php can't be written safely, nothing is
+ * changed and the salts are used; the settings page shows the line to add.
+ * ---------------------------------------------------------------------- */
+
+define( 'SD_GRC_WPCONFIG_MARK', '// GDF Google Reviews: encryption key for the stored Google API key. Do not change.' );
+
+function sd_grc_wpconfig_path() {
+	if ( file_exists( ABSPATH . 'wp-config.php' ) ) {
+		return ABSPATH . 'wp-config.php';
+	}
+	$up = dirname( ABSPATH ) . '/wp-config.php';
+	if ( file_exists( $up ) && ! file_exists( dirname( ABSPATH ) . '/wp-settings.php' ) ) {
+		return $up;
+	}
+	return '';
+}
+
+/** Adds GDF_GRC_ENCRYPTION_KEY to wp-config.php and re-encrypts the saved API key. Returns true on success. */
+function sd_grc_install_encryption_key() {
+	if ( defined( 'GDF_GRC_ENCRYPTION_KEY' ) ) {
+		return true;
+	}
+	$path = sd_grc_wpconfig_path();
+	if ( ! $path || ! is_writable( $path ) ) {
+		return false;
+	}
+	$orig = file_get_contents( $path ); // phpcs:ignore WordPress.WP.AlternativeFunctions
+	if ( false === $orig || false !== strpos( $orig, 'GDF_GRC_ENCRYPTION_KEY' ) ) {
+		return false; // Unreadable, or already there but not loaded: leave it alone.
+	}
+
+	// Insert just above the "stop editing" comment, or failing that above the wp-settings.php require.
+	$pos = strpos( $orig, "/* That's all, stop editing" );
+	if ( false === $pos && preg_match( '/require_once\s*\(?\s*ABSPATH\s*\.\s*[\'"]wp-settings\.php/', $orig, $m, PREG_OFFSET_CAPTURE ) ) {
+		$pos = $m[0][1];
+	}
+	if ( false === $pos ) {
+		return false;
+	}
+	$pos = strrpos( substr( $orig, 0, $pos ), "\n" );
+	$pos = false === $pos ? 0 : $pos + 1; // Start of that line.
+
+	$secret = bin2hex( random_bytes( 32 ) );
+	$eol    = false !== strpos( $orig, "\r\n" ) ? "\r\n" : "\n";
+	$insert = SD_GRC_WPCONFIG_MARK . $eol . "define( 'GDF_GRC_ENCRYPTION_KEY', '" . $secret . "' );" . $eol . $eol;
+	$new    = substr( $orig, 0, $pos ) . $insert . substr( $orig, $pos );
+
+	// Decrypt the saved API key with the current (salt-based) key before switching.
+	$raw   = get_option( SD_GRC_OPT, array() );
+	$plain = ! empty( $raw['api_key'] ) ? sd_grc_decrypt( $raw['api_key'] ) : '';
+
+	if ( strlen( $new ) !== file_put_contents( $path, $new, LOCK_EX ) || file_get_contents( $path ) !== $new ) { // phpcs:ignore WordPress.WP.AlternativeFunctions
+		file_put_contents( $path, $orig, LOCK_EX ); // phpcs:ignore WordPress.WP.AlternativeFunctions
+		return false;
+	}
+
+	define( 'GDF_GRC_ENCRYPTION_KEY', $secret );
+	if ( $plain ) {
+		$raw['api_key'] = sd_grc_encrypt( $plain );
+		update_option( SD_GRC_OPT, $raw );
+	}
+	delete_transient( 'sd_grc_wpconfig_failed' );
+	return true;
+}
+
+register_activation_hook( __FILE__, 'sd_grc_install_encryption_key' );
+
+add_action(
+	'admin_init',
+	function () {
+		if ( defined( 'GDF_GRC_ENCRYPTION_KEY' ) || ! current_user_can( 'manage_options' ) || get_transient( 'sd_grc_wpconfig_failed' ) ) {
+			return;
+		}
+		if ( ! sd_grc_install_encryption_key() ) {
+			set_transient( 'sd_grc_wpconfig_failed', 1, DAY_IN_SECONDS ); // Don't retry on every page load.
+		}
+	},
+	15
+);
+
+// Encrypt a key saved by an older version of the plugin.
+add_action(
+	'admin_init',
+	function () {
+		$raw = get_option( SD_GRC_OPT, array() );
+		if ( ! empty( $raw['api_key'] ) && ! sd_grc_is_encrypted( $raw['api_key'] ) ) {
+			$raw['api_key'] = sd_grc_encrypt( $raw['api_key'] );
+			update_option( SD_GRC_OPT, $raw );
+		}
+	},
+	20
 );
 
 add_action(
@@ -391,13 +590,28 @@ function sd_grc_settings_page() {
 			<?php submit_button( 'Fetch now', 'secondary', 'submit', false ); ?>
 		</form>
 
+		<?php if ( ! defined( 'GDF_GRC_ENCRYPTION_KEY' ) ) : ?>
+			<div class="notice notice-warning inline"><p>The plugin couldn't add its encryption key to <code>wp-config.php</code> (the file isn't writable), so the API key is encrypted with the site's salts instead. For a key that survives salt changes, add these lines to <code>wp-config.php</code> above <em>"That's all, stop editing"</em>, then enter the API key again:</p>
+			<pre style="background:#f6f7f7;padding:8px;user-select:all"><?php echo esc_html( SD_GRC_WPCONFIG_MARK . "\n" . "define( 'GDF_GRC_ENCRYPTION_KEY', '" . bin2hex( random_bytes( 32 ) ) . "' );" ); ?></pre></div>
+		<?php endif; ?>
+
 		<h2>Settings</h2>
 		<form method="post" action="options.php">
 			<?php settings_fields( 'sd_grc' ); ?>
 			<table class="form-table">
 				<tr>
 					<th><label for="sd_grc_key">Google API key</label></th>
-					<td><input type="password" id="sd_grc_key" name="<?php echo esc_attr( SD_GRC_OPT ); ?>[api_key]" value="<?php echo esc_attr( $s['api_key'] ); ?>" class="regular-text" autocomplete="off">
+					<td>
+					<?php if ( $s['api_key_error'] ) : ?>
+						<div class="notice notice-error inline"><p>The saved key can't be decrypted, probably because the WordPress salts have changed. Please paste the key again.</p></div>
+					<?php endif; ?>
+					<?php if ( '' !== $s['api_key'] ) : ?>
+						<input type="password" id="sd_grc_key" name="<?php echo esc_attr( SD_GRC_OPT ); ?>[api_key]" value="" placeholder="••••••••••••••••  (saved)" class="regular-text" autocomplete="new-password">
+						<p class="description"><strong>A key is saved.</strong> It is stored encrypted, hidden for security and never sent to the browser. Leave blank to keep it, or paste a new key to replace it.</p>
+						<label><input type="checkbox" name="<?php echo esc_attr( SD_GRC_OPT ); ?>[api_key_clear]" value="1"> Remove the saved key</label>
+					<?php else : ?>
+						<input type="password" id="sd_grc_key" name="<?php echo esc_attr( SD_GRC_OPT ); ?>[api_key]" value="" class="regular-text" autocomplete="new-password">
+					<?php endif; ?>
 					<p class="description">Places API (New) must be enabled for this key. Restrict the key to Places API and the server's IP.</p></td>
 				</tr>
 				<tr>
@@ -421,17 +635,18 @@ function sd_grc_settings_page() {
 					<th><label for="sd_grc_symbol">Rating symbol</label></th>
 					<td><input type="text" id="sd_grc_symbol" name="<?php echo esc_attr( SD_GRC_OPT ); ?>[symbol]" value="<?php echo esc_attr( $s['symbol'] ); ?>" class="small-text">
 					<span style="font-size:1.4em;vertical-align:middle;margin-left:8px"><?php echo esc_html( sd_grc_symbol( $s['symbol'] ) ); ?></span>
-					<p class="description">HTML entity or character used by <code>[google_rating display="symbol"]</code> and <code>display="both"</code>, e.g. <code>&amp;#9733;</code> (★) or <code>&amp;#11088;</code> (⭐). Can be overridden per shortcode with <code>symbol="…"</code>.</p></td>
+					<p class="description">HTML entity or character used by <code>[gdf_google_rating display="symbol"]</code> and <code>display="both"</code>, e.g. <code>&amp;#9733;</code> (★) or <code>&amp;#11088;</code> (⭐). Can be overridden per shortcode with <code>symbol="…"</code>.</p></td>
 				</tr>
 			</table>
 			<?php submit_button(); ?>
 		</form>
 
 		<h2>Usage</h2>
-		<p><code>[google_review_count]</code> &nbsp; <code>[google_review_count animate="yes"]</code> &nbsp; <code>[google_review_count round="10" suffix="+"]</code> &nbsp; <code>[google_rating]</code></p>
-		<p>Rating and/or count in one: <code>[google_reviews]</code> → 4.9 ★ from 127 reviews &nbsp; <code>[google_reviews show="rating"]</code> &nbsp; <code>[google_reviews show="count"]</code> &nbsp; <code>[google_reviews display="symbol" separator=" · "]</code>. Also accepts <code>count_animate</code>, <code>count_round</code>, <code>count_prefix</code>, <code>count_suffix</code>.</p>
-		<p>Rating with a symbol: <code>[google_rating display="symbol"]</code> → ★★★★★ &nbsp; <code>[google_rating display="both"]</code> → 4.9 ★ &nbsp; <code>[google_rating display="both" position="before" repeat="yes"]</code> → ★★★★★ 4.9 &nbsp; <code>[google_rating display="both" symbol="&amp;#11088;"]</code> → 4.9 ⭐</p>
-		<p>Ticker: add a Divi Text module, give it the CSS class <code>sd-ticker</code>, and put the ticker text in it, e.g. <code>★★★★★ Rated [google_rating] from [google_review_count] Google reviews</code>. Optional: <code>sd-ticker--slow</code>, <code>sd-ticker--fast</code>, <code>sd-ticker--reverse</code>.</p>
+		<p><code>[gdf_google_review_count]</code> &nbsp; <code>[gdf_google_review_count animate="yes"]</code> &nbsp; <code>[gdf_google_review_count round="10" suffix="+"]</code> &nbsp; <code>[gdf_google_rating]</code></p>
+		<p>Rating and/or count in one: <code>[gdf_google_reviews]</code> → 4.9 ★ from 127 reviews &nbsp; <code>[gdf_google_reviews show="rating"]</code> &nbsp; <code>[gdf_google_reviews show="count"]</code> &nbsp; <code>[gdf_google_reviews display="symbol" separator=" · "]</code>. Also accepts <code>count_animate</code>, <code>count_round</code>, <code>count_prefix</code>, <code>count_suffix</code>.</p>
+		<p>Rating with a symbol: <code>[gdf_google_rating display="symbol"]</code> → ★★★★★ &nbsp; <code>[gdf_google_rating display="both"]</code> → 4.9 ★ &nbsp; <code>[gdf_google_rating display="both" position="before" repeat="yes"]</code> → ★★★★★ 4.9 &nbsp; <code>[gdf_google_rating display="both" symbol="&amp;#11088;"]</code> → 4.9 ⭐</p>
+		<p><em>The older unprefixed names (<code>[google_review_count]</code>, <code>[google_rating]</code>, <code>[google_reviews]</code>) still work unless another plugin uses them.</em></p>
+		<p>Ticker: add a Divi Text module, give it the CSS class <code>sd-ticker</code>, and put the ticker text in it, e.g. <code>★★★★★ Rated [gdf_google_rating] from [gdf_google_review_count] Google reviews</code>. Optional: <code>sd-ticker--slow</code>, <code>sd-ticker--fast</code>, <code>sd-ticker--reverse</code>.</p>
 	</div>
 	<?php
 }

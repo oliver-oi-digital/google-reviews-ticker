@@ -4,21 +4,33 @@ WordPress plugin by [Get Digital Fit](https://www.getdigitalfit.co.uk). It fetch
 
 ## Install
 
-Zip this folder as `shutterdog-review-count/` and upload it via **Plugins → Add New → Upload Plugin**. Then go to **Settings → Google Review Count** and add your Google API key and Place ID.
+Zip this folder as `gdf-google-reviews/` and upload it via **Plugins → Add New → Upload Plugin**. Then go to **Settings → Google Review Count** and add your Google API key and Place ID. Once saved, the API key is never shown again or sent to the browser; leave the field blank to keep it, paste a new key to replace it, or tick "Remove the saved key".
+
+### API key security
+
+The API key is stored encrypted in the database (libsodium, bundled with WordPress) and is never shown on the settings page or sent to the browser.
+
+On activation the plugin generates a random 64-character encryption key and adds it to `wp-config.php` as `GDF_GRC_ENCRYPTION_KEY`, just above the "That's all, stop editing" line. It only does this if `wp-config.php` is writable; it checks the write and puts the original back if anything doesn't match. Any API key that's already saved is re-encrypted with the new key.
+
+If `wp-config.php` isn't writable, the plugin falls back to the site's `AUTH_KEY`/`AUTH_SALT` and the settings page shows the exact lines to paste in manually (then re-enter the API key). It retries the automatic write once a day.
+
+Keep `GDF_GRC_ENCRYPTION_KEY` when moving the site. If it's lost or changed, the saved API key can't be decrypted and must be entered again; the settings page will say so. Deleting the plugin removes the line from `wp-config.php`.
 
 ## Shortcodes
 
 | Shortcode | Output |
 |---|---|
-| `[google_review_count]` | 127 |
-| `[google_review_count animate="yes" round="10" suffix="+"]` | 120+ (counts up when scrolled into view) |
-| `[google_rating]` | 4.9 |
-| `[google_rating display="symbol"]` | ★★★★★ |
-| `[google_rating display="both" position="before"]` | ★ 4.9 |
-| `[google_reviews]` | 4.9 ★ from 127 reviews |
-| `[google_reviews show="rating"]` / `show="count"` | Rating only / count only |
+| `[gdf_google_review_count]` | 127 |
+| `[gdf_google_review_count animate="yes" round="10" suffix="+"]` | 120+ (counts up when scrolled into view) |
+| `[gdf_google_rating]` | 4.9 |
+| `[gdf_google_rating display="symbol"]` | ★★★★★ |
+| `[gdf_google_rating display="both" position="before"]` | ★ 4.9 |
+| `[gdf_google_reviews]` | 4.9 ★ from 127 reviews |
+| `[gdf_google_reviews show="rating"]` / `show="count"` | Rating only / count only |
 
-`[google_rating]` and `[google_reviews]` accept `display` (`number`, `symbol` or `both`), `symbol` (an HTML entity such as `&#9733;`), `position` (`before` or `after`), `repeat` (`yes` or `no`) and `decimals`. `[google_reviews]` also accepts `separator`, `count_prefix`, `count_suffix`, `count_round` and `count_animate`. The default symbol is set on the settings page.
+`[gdf_google_rating]` and `[gdf_google_reviews]` accept `display` (`number`, `symbol` or `both`), `symbol` (an HTML entity such as `&#9733;`), `position` (`before` or `after`), `repeat` (`yes` or `no`) and `decimals`. `[gdf_google_reviews]` also accepts `separator`, `count_prefix`, `count_suffix`, `count_round` and `count_animate`. The default symbol is set on the settings page.
+
+The older unprefixed names (`[google_review_count]`, `[google_rating]`, `[google_reviews]`) still work for existing pages, unless another plugin has already registered them.
 
 ## Ticker
 
